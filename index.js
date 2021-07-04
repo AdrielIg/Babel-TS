@@ -12,6 +12,10 @@ const hanldebars = require('express-handlebars')
 const Helper = require('./Helper')
 //fs
 const fs = require('fs')
+//Model chat
+const Chat = require('./modelos/Chat')
+//Model Product
+const Products = require('./modelos/Products')
 
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
@@ -32,14 +36,13 @@ let PRODUCTOS = [{
   id: 2
 }
 ]
-//Mensajes
-const messages = []
+
 
 const HelperClass = new Helper(PRODUCTOS)
 
-const middleWareId = (req, res, next) => {
+const middleWareId = async (req, res, next) => {
   const id = Number(req.params.id)
-  const product = PRODUCTOS.find(item => item.id === id)
+  const product = Products.getProduct(id)
   if (product) {
     next()
   }
@@ -52,29 +55,32 @@ const middleWareId = (req, res, next) => {
 //Listar Productos
 
 
-router.get('/productos/listar', (req, res) => {
+router.get('/productos/listar', async (req, res) => {
   try {
-    if (PRODUCTOS.length === 0) {
+    const productos = await Products.getProducts()
+    if (!productos.length) {
       res.json({ error: 'No hay productos cargados' })
-
     }
     else {
-      const productsData = HelperClass.listar()
-      res.status(200).json(productsData)
-
+      res.json(productos)
     }
+
   }
   catch (err) {
     console.log(`Ha ocurrido un error: ${err}`)
   }
 })
-
 //Listar Productos por ID
-router.get('/productos/listar/:id', middleWareId, (req, res) => {
+router.get('/productos/listar/:id', middleWareId, async (req, res) => {
   const productId = Number(req.params.id)
   try {
-    const productFiltered = HelperClass.listarById(productId)
-    res.status(200).json(productFiltered)
+    const product = await Products.getProduct(productId)
+    if (!product) {
+      res.json({ error: 'No se encontro ningun producto' })
+    }
+    else {
+      res.status(200).json(product)
+    }
   }
   catch (err) {
     console.log(`Ha ocurrido un error: ${err}`)
@@ -83,13 +89,11 @@ router.get('/productos/listar/:id', middleWareId, (req, res) => {
 
 //Almacenar Producto
 // Recibiendo datos desde el body
-router.post('/productos/guardar', (req, res) => {
+router.post('/productos/guardar', async (req, res) => {
   try {
     //Agregamos id
-    const productAgregado = HelperClass.listarProductoAgregado(req.body)
-    //Agregamos el producto a los PRODUCTOS
-    PRODUCTOS.push(productAgregado)
-    /* res.status(200).json(productAgregado) */
+    const { title, price, thumbnail } = req.body
+    await Product.addProduct(title, price, thumbnail)
     res.status(200).redirect('/productos/cargar')
 
   }
@@ -99,13 +103,12 @@ router.post('/productos/guardar', (req, res) => {
 })
 
 //Borrar un producto segun id
-router.delete('/productos/borrar/:id', middleWareId, (req, res) => {
+router.delete('/productos/borrar/:id', middleWareId, async (req, res) => {
   try {
     const id = Number(req.params.id)
-    const itemDeleted = HelperClass.mostrarItemBorrado(id)
-    //Borrar producto
-    HelperClass.borrarItems(id)
-    res.status(200).send(itemDeleted)
+    console.log('borrar')
+    const productDeleted = await Products.deleteProduct(id)
+    res.status(200).json(productDeleted)
   }
   catch (err) {
     console.log(`Ha ocurrido un error: ${err}`)
@@ -114,11 +117,11 @@ router.delete('/productos/borrar/:id', middleWareId, (req, res) => {
 
 
 //Actualizar producto por Id
-router.put('/productos/actualizar/:id', middleWareId, (req, res) => {
+router.put('/productos/actualizar/:id', middleWareId, async (req, res) => {
   try {
-    const id = Number(req.params.id)
+    const id = parseInt(req.params.id)
     const { title, price, thumbnail } = req.body
-    const product = HelperClass.actualizarItem(id, title, price, thumbnail)
+    const product = await Products.updateProduct(id, title, price, thumbnail)
     res.send(product)
   }
   catch (err) {
@@ -167,22 +170,23 @@ const server = http.listen(8080, () => {
 
 //Socket
 
-io.on('connection', socket => {
+io.on('connection', async (socket) => {
   console.log(`nuevo cliente: ${socket.id}`)
-  socket.emit('productos', PRODUCTOS)
-  socket.emit('messages', messages)
+  socket.emit('productos', await Products.getProducts())
+  socket.emit('messages', await Chat.readMessages())
 
-  socket.on('nuevoProducto', data => {
-    //Agregar Id a producto e insertarlo en PRODUCTOS
-    const product = HelperClass.listarProductoAgregado(data)
-    PRODUCTOS.push(product)
+  socket.on('nuevoProducto', async (data) => {
+    const { title, price, thumbnail } = data
+
+    const product = await Products.addProduct(title, price, thumbnail)
+
     //Enviar todos los productos a los sockets para
     //que handlebars rerenderice
-    io.sockets.emit('productos', PRODUCTOS)
+    io.sockets.emit('productos', await Products.getProducts())
 
   })
 
-  socket.on('newMessage', data => {
+  /* socket.on('newMessage', data => {
     messages.push(data)
 
     io.sockets.emit('messages', messages)
@@ -195,6 +199,12 @@ io.on('connection', socket => {
       }
 
     })
+  }) */
+
+  socket.on('newMessage', async (data) => {
+    const { email, text, time } = data
+    await Chat.addMessage(email, text, time)
+    io.sockets.emit('messages', await Chat.readMessages())
   })
 
 })
